@@ -7,6 +7,7 @@ import { getLearnerMemory, recordConversation, recordLearnerTurn, updateLearnerM
 import { listOpenMistakes, recordMistake, resolveMistake } from "./store.js";
 import { synthesizeSpeech, transcribeAudio } from "./speech.js";
 import { updateSkillScores, progressSnapshot, type SkillScores } from "./progress-engine.js";
+import { databaseEnabled, loadProfile, saveProfile as persistProfile } from "./database.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
@@ -15,10 +16,24 @@ app.use(express.json({ limit: "20mb" }));
 
 const defaultScores: SkillScores = { speaking: 28, listening: 35, grammar: 36, vocabulary: 42, pronunciation: 30 };
 const profiles = new Map<string, { level: string; scores: SkillScores }>();
-function getProfile(userId: string) { return profiles.get(userId) ?? { level: "A1", scores: { ...defaultScores } }; }
-function saveProfile(userId: string, level: string, scores: SkillScores) { profiles.set(userId, { level, scores }); return profiles.get(userId)!; }
 
-app.get("/health", (_req, res) => res.json({ ok: true, service: "studyos-english-api", aiEnabled: Boolean(process.env.OPENAI_API_KEY), voiceEnabled: Boolean(process.env.OPENAI_API_KEY), realtimeEnabled: Boolean(process.env.OPENAI_API_KEY), adaptiveEngine: true, progressEngine: true }));
+async function getProfile(userId: string) {
+  const cached = profiles.get(userId);
+  if (cached) return cached;
+  const stored = await loadProfile(userId);
+  const profile = stored ?? { level: "A1", scores: { ...defaultScores } };
+  profiles.set(userId, profile);
+  return profile;
+}
+
+async function saveProfile(userId: string, level: string, scores: SkillScores) {
+  const profile = { level, scores };
+  profiles.set(userId, profile);
+  await persistProfile(userId, profile);
+  return profile;
+}
+
+app.get("/health", (_req, res) => res.json({ ok: true, service: "studyos-english-api", aiEnabled: Boolean(process.env.OPENAI_API_KEY), voiceEnabled: Boolean(process.env.OPENAI_API_KEY), realtimeEnabled: Boolean(process.env.OPENAI_API_KEY), adaptiveEngine: true, progressEngine: true, database: databaseEnabled() }));
 
 app.get("/api/v1/lessons/daily", (req, res) => {
   const level = String(req.query.level ?? "A1").toUpperCase();
@@ -26,9 +41,9 @@ app.get("/api/v1/lessons/daily", (req, res) => {
   res.json({ plan: buildDailyPlan({ cefrLevel: level, ...defaultScores }, minutes) });
 });
 
-app.get("/api/v1/users/:userId/lesson/today", (req, res) => {
+app.get("/api/v1/users/:userId/lesson/today", async (req, res) => {
   const userId = req.params.userId;
-  const profile = getProfile(userId);
+  const profile = await getProfile(userId);
   const dailyMinutes = Math.max(5, Math.min(60, Number(req.query.minutes ?? 10)));
   const memory = getLearnerMemory(userId);
   const mistakes = listOpenMistakes(userId);
@@ -36,27 +51,27 @@ app.get("/api/v1/users/:userId/lesson/today", (req, res) => {
   res.json({ lesson: buildAdaptiveLesson(input), progress: progressSnapshot(profile.scores, profile.level), memory, mistakes });
 });
 
-app.get("/api/v1/users/:userId/progress", (req, res) => {
-  const profile = getProfile(req.params.userId);
+app.get("/api/v1/users/:userId/progress", async (req, res) => {
+  const profile = await getProfile(req.params.userId);
   res.json({ progress: progressSnapshot(profile.scores, profile.level) });
 });
 
-app.post("/api/v1/users/:userId/progress/score", (req, res) => {
+app.post("/api/v1/users/:userId/progress/score", async (req, res) => {
   const userId = req.params.userId;
-  const profile = getProfile(userId);
+  const profile = await getProfile(userId);
   const skill = String(req.body?.skill ?? "speaking") as Skill;
   if (!(skill in profile.scores)) return res.status(400).json({ error: "invalid skill" });
   const performance = Number(req.body?.performance ?? 0);
   const scores = updateSkillScores(profile.scores, skill, performance);
-  const next = saveProfile(userId, progressSnapshot(scores, profile.level).cefrLevel, scores);
+  const next = await saveProfile(userId, progressSnapshot(scores, profile.level).cefrLevel, scores);
   return res.json({ progress: progressSnapshot(next.scores, next.level) });
 });
 
-app.post("/api/v1/placement/submit", (req, res) => {
+app.post("/api/v1/placement/submit", async (req, res) => {
   const score = Math.max(0, Math.min(100, Number(req.body?.score ?? 0)));
   const level = score >= 80 ? "B2" : score >= 60 ? "B1" : score >= 40 ? "A2" : "A1";
   const userId = String(req.body?.userId ?? "demo-user");
-  saveProfile(userId, level, { ...defaultScores, speaking: score, grammar: score, vocabulary: score });
+  await saveProfile(userId, level, { ...defaultScores, speaking: score, grammar: score, vocabulary: score });
   res.json({ score, level, nextStep: "Start your personalized daily lesson." });
 });
 
@@ -72,23 +87,23 @@ async function handleTutorTurn(userId: string, message: string, level: string, g
   if (ai) {
     const correction = ai.correction ? String(ai.correction) : null;
     if (correction) recordMistake({ userId, category: String(ai.category ?? "grammar"), source: "conversation", originalText: message, correctedText: correction });
-    return { reply: String(ai.reply ?? "Tell me more."), correction, score: Number(ai.score ?? 85), reviewQueued: Boolean(correction), provider: "openai" as const };
+    return { reply: String(ai.reply ?? "Tell me more."), correction, category: String(ai.category ?? "speaking"), score: Number(ai.score ?? 85), reviewQueued: Boolean(correction), provider: "openai" as const };
   }
   const correction = /yesterday.*\bgo\b|\bi go\b/i.test(message) ? "Yesterday, I went to..." : null;
   if (correction) recordMistake({ userId, category: "grammar", source: "conversation", originalText: message, correctedText: correction });
-  return { reply: correction ? `Good job. A natural correction is: "${correction}". Now try saying the whole sentence.` : "Nice! Tell me a little more about that.", correction, score: correction ? 78 : 88, reviewQueued: Boolean(correction), provider: "fallback" as const };
+  return { reply: correction ? `Good job. A natural correction is: "${correction}". Now try saying the whole sentence.` : "Nice! Tell me a little more about that.", correction, category: correction ? "grammar" : "speaking", score: correction ? 78 : 88, reviewQueued: Boolean(correction), provider: "fallback" as const };
 }
 
-function skillFromCategory(category: string): Skill { const value = category.toLowerCase(); if (value.includes("pronunciation")) return "pronunciation"; if (value.includes("vocab")) return "vocabulary"; if (value.includes("listen")) return "listening"; return "grammar"; }
+function skillFromCategory(category: string): Skill { const value = category.toLowerCase(); if (value.includes("pronunciation")) return "pronunciation"; if (value.includes("vocab")) return "vocabulary"; if (value.includes("listen")) return "listening"; if (value.includes("speak")) return "speaking"; return "grammar"; }
 async function processTutorResult(userId: string, result: Awaited<ReturnType<typeof handleTutorTurn>>) {
-  const profile = getProfile(userId);
-  const skill = result.correction ? skillFromCategory(String(result.correction)) : "speaking";
+  const profile = await getProfile(userId);
+  const skill = skillFromCategory(result.category);
   const scores = updateSkillScores(profile.scores, skill, result.score);
   return saveProfile(userId, progressSnapshot(scores, profile.level).cefrLevel, scores);
 }
 
 app.post("/api/v1/conversations", async (req, res) => {
-  const message = String(req.body?.message ?? "").trim(); const userId = String(req.body?.userId ?? "demo-user"); const profile = getProfile(userId); const level = String(req.body?.level ?? profile.level).toUpperCase(); const goal = req.body?.goal ? String(req.body.goal) : undefined;
+  const message = String(req.body?.message ?? "").trim(); const userId = String(req.body?.userId ?? "demo-user"); const profile = await getProfile(userId); const level = String(req.body?.level ?? profile.level).toUpperCase(); const goal = req.body?.goal ? String(req.body.goal) : undefined;
   if (!message) return res.status(400).json({ error: "message is required" });
   try { const result = await handleTutorTurn(userId, message, level, goal); const saved = await processTutorResult(userId, result); updateLearnerMemory(userId, { goals: goal ? [goal] : [], preferredTopics: req.body?.topic ? [String(req.body.topic)] : [] }); recordConversation(userId); return res.json({ ...result, memory: getLearnerMemory(userId), progress: progressSnapshot(saved.scores, saved.level) }); }
   catch (error) { console.error("AI tutor unavailable", error); return res.status(502).json({ error: "Tutor AI unavailable" }); }
@@ -104,7 +119,7 @@ app.post("/api/v1/speech/synthesize", async (req, res) => {
 });
 app.post("/api/v1/voice/turn", upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "file is required" }); if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: "Voice AI is not configured. Set OPENAI_API_KEY." });
-  const userId = String(req.body?.userId ?? "demo-user"); const profile = getProfile(userId); const level = String(req.body?.level ?? profile.level).toUpperCase(); const goal = req.body?.goal ? String(req.body.goal) : undefined;
+  const userId = String(req.body?.userId ?? "demo-user"); const profile = await getProfile(userId); const level = String(req.body?.level ?? profile.level).toUpperCase(); const goal = req.body?.goal ? String(req.body.goal) : undefined;
   try { const transcript = await transcribeAudio(req.file, String(req.body?.language ?? "en")); const result = await handleTutorTurn(userId, transcript, level, goal); const saved = await processTutorResult(userId, result); recordConversation(userId); return res.json({ transcript, ...result, progress: progressSnapshot(saved.scores, saved.level), audioBase64: await synthesizeSpeech(result.reply), mimeType: "audio/mpeg" }); } catch { return res.status(502).json({ error: "Unable to process voice turn" }); }
 });
 
