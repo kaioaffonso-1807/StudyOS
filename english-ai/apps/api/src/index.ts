@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 import { buildDailyPlan, type LearningProfile } from "./learning-engine.js";
+import { buildAdaptiveLesson, type AdaptiveInput, type Skill } from "./adaptive-engine.js";
 import { generateTutorReply } from "./ai-tutor.js";
 import { getLearnerMemory, recordConversation, recordLearnerTurn, updateLearnerMemory } from "./memory.js";
 import { listOpenMistakes, recordMistake, resolveMistake } from "./store.js";
@@ -13,12 +14,23 @@ app.use(express.json({ limit: "20mb" }));
 
 const defaultProfile: LearningProfile = { cefrLevel: "A1", speaking: 28, listening: 35, grammar: 36, vocabulary: 42, pronunciation: 30 };
 
-app.get("/health", (_req, res) => res.json({ ok: true, service: "studyos-english-api", aiEnabled: Boolean(process.env.OPENAI_API_KEY), voiceEnabled: Boolean(process.env.OPENAI_API_KEY), realtimeEnabled: Boolean(process.env.OPENAI_API_KEY) }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "studyos-english-api", aiEnabled: Boolean(process.env.OPENAI_API_KEY), voiceEnabled: Boolean(process.env.OPENAI_API_KEY), realtimeEnabled: Boolean(process.env.OPENAI_API_KEY), adaptiveEngine: true }));
 
 app.get("/api/v1/lessons/daily", (req, res) => {
   const level = String(req.query.level ?? defaultProfile.cefrLevel).toUpperCase();
   const minutes = Math.max(5, Math.min(60, Number(req.query.minutes ?? 10)));
   res.json({ plan: buildDailyPlan({ ...defaultProfile, cefrLevel: level }, minutes) });
+});
+
+app.get("/api/v1/users/:userId/lesson/today", (req, res) => {
+  const userId = req.params.userId;
+  const level = String(req.query.level ?? defaultProfile.cefrLevel).toUpperCase();
+  const dailyMinutes = Math.max(5, Math.min(60, Number(req.query.minutes ?? 10)));
+  const memory = getLearnerMemory(userId);
+  const mistakes = listOpenMistakes(userId);
+  const scores: Record<Skill, number> = { speaking: defaultProfile.speaking, listening: defaultProfile.listening, grammar: defaultProfile.grammar, vocabulary: defaultProfile.vocabulary, pronunciation: defaultProfile.pronunciation };
+  const input: AdaptiveInput = { level, goal: memory.goals.at(-1), dailyMinutes, scores, mistakes, interests: memory.interests };
+  res.json({ lesson: buildAdaptiveLesson(input), memory, mistakes });
 });
 
 app.post("/api/v1/placement/submit", (req, res) => {
@@ -29,7 +41,6 @@ app.post("/api/v1/placement/submit", (req, res) => {
 
 app.get("/api/v1/users/:userId/memory", (req, res) => res.json({ memory: getLearnerMemory(req.params.userId) }));
 app.patch("/api/v1/users/:userId/memory", (req, res) => res.json({ memory: updateLearnerMemory(req.params.userId, req.body ?? {}) }));
-
 app.get("/api/v1/users/:userId/mistakes", (req, res) => res.json({ mistakes: listOpenMistakes(req.params.userId) }));
 app.post("/api/v1/users/:userId/mistakes", (req, res) => {
   const item = recordMistake({ userId: req.params.userId, category: String(req.body?.category ?? "grammar"), source: String(req.body?.source ?? "conversation"), originalText: req.body?.originalText, correctedText: req.body?.correctedText });
@@ -94,8 +105,7 @@ app.post("/api/v1/voice/turn", upload.single("file"), async (req, res) => {
     const transcript = await transcribeAudio(req.file, String(req.body?.language ?? "en"));
     const result = await handleTutorTurn(userId, transcript, level, goal);
     recordConversation(userId);
-    const reply = result.reply;
-    return res.json({ transcript, ...result, audioBase64: await synthesizeSpeech(reply), mimeType: "audio/mpeg" });
+    return res.json({ transcript, ...result, audioBase64: await synthesizeSpeech(result.reply), mimeType: "audio/mpeg" });
   } catch (error) { console.error("Voice turn failed", error); return res.status(502).json({ error: "Unable to process voice turn" }); }
 });
 
