@@ -23,6 +23,18 @@ CREATE TABLE learning_profiles (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE learner_memory (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  goal TEXT,
+  interests TEXT[] NOT NULL DEFAULT '{}',
+  preferred_topics TEXT[] NOT NULL DEFAULT '{}',
+  learned_vocabulary TEXT[] NOT NULL DEFAULT '{}',
+  conversation_count INT NOT NULL DEFAULT 0,
+  total_turns INT NOT NULL DEFAULT 0,
+  last_active_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE lessons (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT NOT NULL, skill TEXT NOT NULL, cefr_level TEXT NOT NULL, content JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE attempts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, lesson_id UUID REFERENCES lessons(id) ON DELETE SET NULL, answer TEXT, is_correct BOOLEAN, feedback JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE mistakes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, category TEXT NOT NULL, source TEXT NOT NULL, original_text TEXT, corrected_text TEXT, count INT NOT NULL DEFAULT 1, last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(), resolved BOOLEAN NOT NULL DEFAULT false);
