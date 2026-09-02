@@ -1,3 +1,5 @@
+import { databaseEnabled, loadMemory, saveMemory } from "./database.js";
+
 export type LearnerMemory = {
   userId: string;
   interests: string[];
@@ -11,25 +13,21 @@ export type LearnerMemory = {
 
 const memories = new Map<string, LearnerMemory>();
 
-export function getLearnerMemory(userId: string): LearnerMemory {
-  const existing = memories.get(userId);
-  if (existing) return existing;
-  const created: LearnerMemory = {
-    userId,
-    interests: [],
-    goals: [],
-    vocabulary: [],
-    preferredTopics: [],
-    conversationCount: 0,
-    totalTurns: 0,
-    lastActiveAt: new Date().toISOString()
-  };
+export async function getLearnerMemory(userId: string): Promise<LearnerMemory> {
+  const cached = memories.get(userId);
+  if (cached) return cached;
+  if (databaseEnabled()) {
+    const stored = await loadMemory(userId);
+    if (stored) { memories.set(userId, stored); return stored; }
+  }
+  const created: LearnerMemory = { userId, interests: [], goals: [], vocabulary: [], preferredTopics: [], conversationCount: 0, totalTurns: 0, lastActiveAt: new Date().toISOString() };
   memories.set(userId, created);
+  if (databaseEnabled()) await saveMemory(created);
   return created;
 }
 
-export function updateLearnerMemory(userId: string, patch: Partial<Omit<LearnerMemory, 'userId'>>) {
-  const memory = getLearnerMemory(userId);
+export async function updateLearnerMemory(userId: string, patch: Partial<Omit<LearnerMemory, 'userId'>>) {
+  const memory = await getLearnerMemory(userId);
   if (patch.interests) memory.interests = unique([...memory.interests, ...patch.interests]).slice(-30);
   if (patch.goals) memory.goals = unique([...memory.goals, ...patch.goals]).slice(-10);
   if (patch.vocabulary) memory.vocabulary = unique([...memory.vocabulary, ...patch.vocabulary]).slice(-100);
@@ -37,23 +35,16 @@ export function updateLearnerMemory(userId: string, patch: Partial<Omit<LearnerM
   if (typeof patch.conversationCount === 'number') memory.conversationCount = patch.conversationCount;
   if (typeof patch.totalTurns === 'number') memory.totalTurns = patch.totalTurns;
   memory.lastActiveAt = new Date().toISOString();
+  if (databaseEnabled()) await saveMemory(memory);
   return memory;
 }
 
-export function recordLearnerTurn(userId: string) {
-  const memory = getLearnerMemory(userId);
-  memory.totalTurns += 1;
-  memory.lastActiveAt = new Date().toISOString();
-  return memory;
+export async function recordLearnerTurn(userId: string) {
+  return updateLearnerMemory(userId, { totalTurns: (await getLearnerMemory(userId)).totalTurns + 1 });
 }
 
-export function recordConversation(userId: string) {
-  const memory = getLearnerMemory(userId);
-  memory.conversationCount += 1;
-  memory.lastActiveAt = new Date().toISOString();
-  return memory;
+export async function recordConversation(userId: string) {
+  return updateLearnerMemory(userId, { conversationCount: (await getLearnerMemory(userId)).conversationCount + 1 });
 }
 
-function unique(items: string[]) {
-  return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
-}
+function unique(items: string[]) { return [...new Set(items.map((item) => item.trim()).filter(Boolean))]; }
