@@ -2,6 +2,7 @@ import express from "express";
 import multer from "multer";
 import { buildDailyPlan, type LearningProfile } from "./learning-engine.js";
 import { generateTutorReply } from "./ai-tutor.js";
+import { getLearnerMemory, recordConversation, recordLearnerTurn, updateLearnerMemory } from "./memory.js";
 import { listOpenMistakes, recordMistake, resolveMistake } from "./store.js";
 import { synthesizeSpeech, transcribeAudio } from "./speech.js";
 
@@ -26,6 +27,9 @@ app.post("/api/v1/placement/submit", (req, res) => {
   res.json({ score, level, nextStep: "Start your personalized daily lesson." });
 });
 
+app.get("/api/v1/users/:userId/memory", (req, res) => res.json({ memory: getLearnerMemory(req.params.userId) }));
+app.patch("/api/v1/users/:userId/memory", (req, res) => res.json({ memory: updateLearnerMemory(req.params.userId, req.body ?? {}) }));
+
 app.get("/api/v1/users/:userId/mistakes", (req, res) => res.json({ mistakes: listOpenMistakes(req.params.userId) }));
 app.post("/api/v1/users/:userId/mistakes", (req, res) => {
   const item = recordMistake({ userId: req.params.userId, category: String(req.body?.category ?? "grammar"), source: String(req.body?.source ?? "conversation"), originalText: req.body?.originalText, correctedText: req.body?.correctedText });
@@ -37,6 +41,20 @@ app.post("/api/v1/users/:userId/mistakes/:id/resolve", (req, res) => {
   return res.json({ mistake: item });
 });
 
+async function handleTutorTurn(userId: string, message: string, level: string, goal?: string) {
+  const memory = getLearnerMemory(userId);
+  recordLearnerTurn(userId);
+  const ai = await generateTutorReply(message, { level, goal, mistakes: listOpenMistakes(userId), memory });
+  if (ai) {
+    const correction = ai.correction ? String(ai.correction) : null;
+    if (correction) recordMistake({ userId, category: String(ai.category ?? "grammar"), source: "conversation", originalText: message, correctedText: correction });
+    return { reply: String(ai.reply ?? "Tell me more."), correction, score: Number(ai.score ?? 85), reviewQueued: Boolean(correction), provider: "openai" as const };
+  }
+  const correction = /yesterday.*\bgo\b|\bi go\b/i.test(message) ? "Yesterday, I went to..." : null;
+  if (correction) recordMistake({ userId, category: "grammar", source: "conversation", originalText: message, correctedText: correction });
+  return { reply: correction ? `Good job. A natural correction is: "${correction}". Now try saying the whole sentence.` : "Nice! Tell me a little more about that.", correction, score: correction ? 78 : 88, reviewQueued: Boolean(correction), provider: "fallback" as const };
+}
+
 app.post("/api/v1/conversations", async (req, res) => {
   const message = String(req.body?.message ?? "").trim();
   const userId = String(req.body?.userId ?? "demo-user");
@@ -44,16 +62,11 @@ app.post("/api/v1/conversations", async (req, res) => {
   const goal = req.body?.goal ? String(req.body.goal) : undefined;
   if (!message) return res.status(400).json({ error: "message is required" });
   try {
-    const ai = await generateTutorReply(message, { level, goal, mistakes: listOpenMistakes(userId) });
-    if (ai) {
-      const correction = ai.correction ? String(ai.correction) : null;
-      if (correction) recordMistake({ userId, category: String(ai.category ?? "grammar"), source: "conversation", originalText: message, correctedText: correction });
-      return res.json({ reply: String(ai.reply ?? "Tell me more."), correction, score: Number(ai.score ?? 85), reviewQueued: Boolean(correction), provider: "openai" });
-    }
-  } catch (error) { console.error("AI tutor unavailable", error); }
-  const correction = /yesterday.*\bgo\b|\bi go\b/i.test(message) ? "Yesterday, I went to..." : null;
-  if (correction) recordMistake({ userId, category: "grammar", source: "conversation", originalText: message, correctedText: correction });
-  return res.json({ reply: correction ? `Good job. A natural correction is: "${correction}". Now try saying the whole sentence.` : "Nice! Tell me a little more about that.", correction, score: correction ? 78 : 88, reviewQueued: Boolean(correction), provider: "fallback" });
+    const result = await handleTutorTurn(userId, message, level, goal);
+    updateLearnerMemory(userId, { goals: goal ? [goal] : [], preferredTopics: req.body?.topic ? [String(req.body.topic)] : [] });
+    recordConversation(userId);
+    return res.json({ ...result, memory: getLearnerMemory(userId) });
+  } catch (error) { console.error("AI tutor unavailable", error); return res.status(502).json({ error: "Tutor AI unavailable" }); }
 });
 
 app.post("/api/v1/speech/transcribe", upload.single("file"), async (req, res) => {
@@ -79,16 +92,13 @@ app.post("/api/v1/voice/turn", upload.single("file"), async (req, res) => {
   const goal = req.body?.goal ? String(req.body.goal) : undefined;
   try {
     const transcript = await transcribeAudio(req.file, String(req.body?.language ?? "en"));
-    const ai = await generateTutorReply(transcript, { level, goal, mistakes: listOpenMistakes(userId) });
-    if (!ai) return res.status(503).json({ error: "Tutor AI unavailable" });
-    const correction = ai.correction ? String(ai.correction) : null;
-    if (correction) recordMistake({ userId, category: String(ai.category ?? "grammar"), source: "voice", originalText: transcript, correctedText: correction });
-    const reply = String(ai.reply ?? "Tell me more.");
-    return res.json({ transcript, reply, correction, score: Number(ai.score ?? 85), reviewQueued: Boolean(correction), audioBase64: await synthesizeSpeech(reply), mimeType: "audio/mpeg", provider: "openai" });
+    const result = await handleTutorTurn(userId, transcript, level, goal);
+    recordConversation(userId);
+    const reply = result.reply;
+    return res.json({ transcript, ...result, audioBase64: await synthesizeSpeech(reply), mimeType: "audio/mpeg" });
   } catch (error) { console.error("Voice turn failed", error); return res.status(502).json({ error: "Unable to process voice turn" }); }
 });
 
-// Secure WebRTC bridge: the OpenAI API key stays on the server; the client only sends its SDP offer.
 app.post("/api/v1/realtime/call", async (req, res) => {
   const sdp = String(req.body?.sdp ?? "");
   const level = String(req.body?.level ?? "A1").toUpperCase();
@@ -96,16 +106,7 @@ app.post("/api/v1/realtime/call", async (req, res) => {
   if (!sdp) return res.status(400).json({ error: "sdp is required" });
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return res.status(503).json({ error: "Realtime AI is not configured. Set OPENAI_API_KEY." });
-
-  const instructions = [
-    "You are StudyOS English AI, a patient personal English tutor.",
-    `Student CEFR level: ${level}.`,
-    `Student goal: ${goal}.`,
-    "Speak mostly in English. Adapt vocabulary and speed to the student's level.",
-    "Keep turns short and natural. Correct one important mistake after the student speaks, then continue the conversation.",
-    "Never shame the student. Encourage them to repeat corrected sentences when useful."
-  ].join(" ");
-
+  const instructions = ["You are StudyOS English AI, a patient personal English tutor.", `Student CEFR level: ${level}.`, `Student goal: ${goal}.`, "Speak mostly in English. Adapt vocabulary and speed to the student's level.", "Keep turns short and natural. Correct one important mistake after the student speaks, then continue the conversation.", "Never shame the student. Encourage them to repeat corrected sentences when useful."].join(" ");
   try {
     const form = new FormData();
     form.append("sdp", new Blob([sdp], { type: "application/sdp" }), "offer.sdp");
@@ -114,10 +115,7 @@ app.post("/api/v1/realtime/call", async (req, res) => {
     const answer = await response.text();
     if (!response.ok) return res.status(response.status).type("application/sdp").send(answer);
     return res.status(201).type("application/sdp").send(answer);
-  } catch (error) {
-    console.error("Realtime call failed", error);
-    return res.status(502).json({ error: "Unable to create realtime call" });
-  }
+  } catch (error) { console.error("Realtime call failed", error); return res.status(502).json({ error: "Unable to create realtime call" }); }
 });
 
 app.listen(port, () => console.log(`StudyOS English API listening on port ${port}`));
