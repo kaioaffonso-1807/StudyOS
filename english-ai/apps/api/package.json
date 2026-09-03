@@ -9,18 +9,18 @@
     "test": "tsx --test test/**/*.test.ts"
   },
   "dependencies": {
-    "express": "latest",
-    "openai": "latest",
-    "multer": "latest",
-    "pg": "latest",
-    "@supabase/supabase-js": "latest"
+    "@supabase/supabase-js": "2.112.4",
+    "express": "5.2.1",
+    "multer": "2.3.0",
+    "openai": "7.9.0",
+    "pg": "8.23.0"
   },
   "devDependencies": {
-    "tsx": "latest",
-    "typescript": "latest",
-    "@types/express": "latest",
-    "@types/node": "latest",
-    "@types/multer": "latest",
-    "@types/pg": "latest"
+    "@types/express": "5.0.6",
+    "@types/multer": "2.2.0",
+    "@types/node": "26.4.1",
+    "@types/pg": "8.23.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
   }
 }
