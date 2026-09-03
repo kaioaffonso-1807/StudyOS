@@ -42,6 +42,21 @@ CREATE TABLE conversations (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_
 CREATE TABLE conversation_messages (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK (role IN ('user','assistant','system')), content TEXT NOT NULL, metadata JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE TABLE learning_events (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, skill TEXT NOT NULL, performance NUMERIC(5,2), source TEXT NOT NULL, metadata JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 
+CREATE TABLE review_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  prompt TEXT NOT NULL,
+  answer TEXT,
+  correction TEXT,
+  category TEXT NOT NULL,
+  repetitions INT NOT NULL DEFAULT 0,
+  ease NUMERIC(4,2) NOT NULL DEFAULT 2.50,
+  interval_days NUMERIC(8,2) NOT NULL DEFAULT 0,
+  due_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE billing_accounts (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   stripe_customer_id TEXT UNIQUE,
@@ -56,4 +71,5 @@ CREATE INDEX idx_attempts_user ON attempts(user_id, created_at DESC);
 CREATE INDEX idx_mistakes_user ON mistakes(user_id, resolved, last_seen_at DESC);
 CREATE INDEX idx_messages_conversation ON conversation_messages(conversation_id, created_at);
 CREATE INDEX idx_learning_events_user ON learning_events(user_id, created_at DESC);
+CREATE INDEX idx_review_items_due ON review_items(user_id, due_at);
 CREATE INDEX idx_billing_subscription ON billing_accounts(stripe_subscription_id);
