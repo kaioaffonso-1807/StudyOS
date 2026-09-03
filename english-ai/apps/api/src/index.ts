@@ -7,10 +7,10 @@ import { getLearnerMemory, recordConversation, recordLearnerTurn, updateLearnerM
 import { listOpenMistakes, recordMistake, resolveMistake } from "./store.js";
 import { synthesizeSpeech, transcribeAudio } from "./speech.js";
 import { updateSkillScores, progressSnapshot, type SkillScores } from "./progress-engine.js";
-import { databaseEnabled, loadProfile, saveProfile as persistProfile, createConversation, getActiveConversation, saveConversationMessage, recordLearningEvent } from "./database.js";
+import { databaseEnabled, loadProfile, saveProfile as persistProfile, createConversation, getActiveConversation, saveConversationMessage, recordLearningEvent, getBillingAccount } from "./database.js";
 import { requireAuth, requestUserId, type AuthenticatedRequest } from "./auth.js";
 import { aiRateLimit, corsPolicy, rateLimit, securityHeaders, validateLevel, validateText } from "./security.js";
-import { billingEnabled, createCheckout } from "./billing.js";
+import { billingEnabled, createCheckout, createPortal, constructWebhookEvent, handleStripeEvent } from "./billing.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
@@ -19,6 +19,20 @@ app.disable("x-powered-by");
 app.set("trust proxy", process.env.TRUST_PROXY === "true");
 app.use(securityHeaders);
 app.use(corsPolicy);
+
+app.post("/api/v1/billing/webhook", express.raw({ type: "application/json", limit: "512kb" }), async (req,res) => {
+  const signature = req.header("stripe-signature");
+  if (!signature) return res.status(400).send("Missing Stripe signature");
+  try {
+    const event = constructWebhookEvent(req.body as Buffer, signature);
+    await handleStripeEvent(event);
+    return res.json({ received: true });
+  } catch (error) {
+    console.error("Stripe webhook rejected", error);
+    return res.status(400).send("Invalid webhook");
+  }
+});
+
 app.use(express.json({ limit: "256kb" }));
 app.use("/api/v1", rateLimit, requireAuth);
 const defaultScores: SkillScores = { speaking: 28, listening: 35, grammar: 36, vocabulary: 42, pronunciation: 30 };
@@ -28,6 +42,8 @@ async function saveProfile(userId:string,level:string,scores:SkillScores){const 
 app.get("/health",(_req,res)=>res.json({ok:true,service:"studyos-english-api",aiEnabled:Boolean(process.env.OPENAI_API_KEY),voiceEnabled:Boolean(process.env.OPENAI_API_KEY),realtimeEnabled:Boolean(process.env.OPENAI_API_KEY),adaptiveEngine:true,progressEngine:true,database:databaseEnabled(),authRequired:process.env.AUTH_REQUIRED === "true",billingEnabled:billingEnabled()}));
 app.get("/api/v1/lessons/daily",(req,res)=>{try{const level=validateLevel(req.query.level);const minutes=Math.max(5,Math.min(60,Number(req.query.minutes??10)));if(!Number.isFinite(minutes))return res.status(400).json({error:"invalid minutes"});res.json({plan:buildDailyPlan({cefrLevel:level,...defaultScores},minutes)});}catch(error){return res.status(400).json({error:error instanceof Error?error.message:"invalid request"});}});
 app.post("/api/v1/billing/checkout",async(req:AuthenticatedRequest,res)=>{try{const userId=requestUserId(req,req.body?.userId);const url=await createCheckout(userId,req.authUser?.email);if(!url)return res.status(503).json({error:"Unable to create checkout session"});return res.json({url});}catch(error){return res.status(503).json({error:error instanceof Error?error.message:"Billing unavailable"});}});
+app.get("/api/v1/billing/status",async(req:AuthenticatedRequest,res)=>{try{const userId=requestUserId(req,req.query?.userId as string|undefined);const account=await getBillingAccount(userId);return res.json({billing:account??{userId,plan:"free",status:"inactive"}});}catch{return res.status(500).json({error:"Unable to load billing status"});}});
+app.post("/api/v1/billing/portal",async(req:AuthenticatedRequest,res)=>{try{const userId=requestUserId(req,req.body?.userId);const url=await createPortal(userId);return res.json({url});}catch(error){return res.status(503).json({error:error instanceof Error?error.message:"Billing unavailable"});}});
 app.get("/api/v1/users/:userId/lesson/today",async(req:AuthenticatedRequest,res)=>{try{const userId=requestUserId(req,req.params.userId);const profile=await getProfile(userId);const dailyMinutes=Math.max(5,Math.min(60,Number(req.query.minutes??10)));if(!Number.isFinite(dailyMinutes))return res.status(400).json({error:"invalid minutes"});const memory=await getLearnerMemory(userId);const mistakes=await listOpenMistakes(userId);const input:AdaptiveInput={level:profile.level,goal:memory.goals.at(-1),dailyMinutes,scores:profile.scores,mistakes,interests:memory.interests};res.json({lesson:buildAdaptiveLesson(input),progress:progressSnapshot(profile.scores,profile.level),memory,mistakes});}catch{res.status(500).json({error:"Unable to load lesson"});}});
 app.get("/api/v1/users/:userId/progress",async(req:AuthenticatedRequest,res)=>{const profile=await getProfile(requestUserId(req,req.params.userId));res.json({progress:progressSnapshot(profile.scores,profile.level)});});
 app.post("/api/v1/users/:userId/progress/score",async(req:AuthenticatedRequest,res)=>{const userId=requestUserId(req,req.params.userId);const profile=await getProfile(userId);const skill=String(req.body?.skill??"speaking") as Skill;if(!(skill in profile.scores))return res.status(400).json({error:"invalid skill"});const performance=Number(req.body?.performance);if(!Number.isFinite(performance))return res.status(400).json({error:"performance must be a number"});const scores=updateSkillScores(profile.scores,skill,performance);const next=await saveProfile(userId,progressSnapshot(scores,profile.level).cefrLevel,scores);await recordLearningEvent(userId,skill,performance,"manual");return res.json({progress:progressSnapshot(next.scores,next.level)});});
