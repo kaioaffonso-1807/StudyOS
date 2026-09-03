@@ -3,11 +3,13 @@ import type { User } from "@supabase/supabase-js";
 import pg from "pg";
 
 const { Pool } = pg;
+const ssl = process.env.DATABASE_SSL === "false"
+  ? false
+  : process.env.DATABASE_SSL_CA
+    ? { ca: process.env.DATABASE_SSL_CA, rejectUnauthorized: true }
+    : { rejectUnauthorized: true };
 const pool = process.env.DATABASE_URL
-  ? new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: true },
-    })
+  ? new Pool({ connectionString: process.env.DATABASE_URL, ssl })
   : null;
 
 const stripeSecret = process.env.STRIPE_SECRET_KEY;
@@ -18,8 +20,12 @@ const prices: Record<string, string | undefined> = {
   yearly: process.env.STRIPE_PRICE_PRO_YEARLY,
 };
 
+const successUrl = process.env.BILLING_SUCCESS_URL;
+const cancelUrl = process.env.BILLING_CANCEL_URL;
+const portalReturnUrl = process.env.BILLING_PORTAL_RETURN_URL;
+
 export function billingEnabled() {
-  return Boolean(pool && stripe && prices.monthly);
+  return Boolean(pool && stripe && prices.monthly && prices.yearly && successUrl && cancelUrl && portalReturnUrl);
 }
 
 export function stripeConfigured() {
@@ -50,16 +56,17 @@ async function customerForUser(user: User) {
     metadata: { studyos_user_id: user.id },
   });
   await pool.query(
-    `INSERT INTO billing_customers(user_id,provider,provider_customer_id) VALUES($1,'stripe',$2)`,
+    `INSERT INTO billing_customers(user_id,provider,provider_customer_id) VALUES($1,'stripe',$2)
+     ON CONFLICT(user_id) DO UPDATE SET provider_customer_id=EXCLUDED.provider_customer_id,updated_at=now()`,
     [userId, customer.id],
   );
   return customer.id;
 }
 
-export async function createCheckoutSession(user: User, cycle: "monthly" | "yearly", successUrl: string, cancelUrl: string) {
+export async function createCheckoutSession(user: User, cycle: "monthly" | "yearly", _clientSuccessUrl?: string, _clientCancelUrl?: string) {
   if (!stripe || !pool) throw new Error("billing is not configured");
   const price = prices[cycle];
-  if (!price) throw new Error(`Stripe price for ${cycle} is not configured`);
+  if (!price || !successUrl || !cancelUrl) throw new Error("Stripe billing URLs or price are not configured");
   const customer = await customerForUser(user);
   return stripe.checkout.sessions.create({
     mode: "subscription",
@@ -74,10 +81,10 @@ export async function createCheckoutSession(user: User, cycle: "monthly" | "year
   });
 }
 
-export async function createPortalSession(user: User, returnUrl: string) {
-  if (!stripe) throw new Error("billing is not configured");
+export async function createPortalSession(user: User, _clientReturnUrl?: string) {
+  if (!stripe || !portalReturnUrl) throw new Error("billing portal is not configured");
   const customer = await customerForUser(user);
-  return stripe.billingPortal.sessions.create({ customer, return_url: returnUrl });
+  return stripe.billingPortal.sessions.create({ customer, return_url: portalReturnUrl });
 }
 
 export async function getEntitlement(userId: string) {
