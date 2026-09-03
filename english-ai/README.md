@@ -19,10 +19,11 @@ cp .env.example .env
 npm run dev
 ```
 
-For a production-style API check:
+For production-style API checks:
 
 ```bash
 npm run typecheck
+npm test
 ```
 
 ### Mobile
@@ -46,7 +47,7 @@ Set `EXPO_PUBLIC_API_URL` to the API URL. Configure Supabase variables when auth
 6. Configure Stripe price, webhook secret, success/cancel URLs and customer portal return URL.
 7. Configure Stripe webhook delivery to `/api/v1/billing/webhook`.
 8. Keep all API secrets server-side; never place Stripe or OpenAI secret keys in the mobile app.
-9. Run `npm run typecheck` before release.
+9. Run `npm run typecheck` and `npm test` before release.
 10. Test sign-in, placement, daily lesson, tutor, voice, Smart Review and Stripe webhook flows in a staging environment.
 
 ## Core learning loop
@@ -55,6 +56,10 @@ Conversation → detect mistakes → create review → spaced review → targete
 
 The daily lesson engine prioritizes due review items before generating reinforcement activities.
 
+## Quality gates
+
+The API has automated tests covering adaptive lesson prioritization, spaced-review scheduling and progress calculations. GitHub Actions runs typecheck and the test suite on pushes to the development branch and pull requests targeting `main`.
+
 ## Security
 
 The API includes authentication middleware, CORS restrictions, security headers, request limits and a separate AI rate limit. The in-memory rate limiter is suitable for a single instance; multi-instance production should replace it with a shared store such as Redis.
@@ -62,3 +67,7 @@ The API includes authentication middleware, CORS restrictions, security headers,
 ## Billing
 
 Stripe webhooks are signature-verified and subscription state is persisted in `billing_accounts`. Premium entitlements should be enforced at the API boundary before enabling paid-only capabilities.
+
+## Release status
+
+The codebase is prepared for staging. Production release still requires external service configuration and end-to-end validation with real Supabase, PostgreSQL, OpenAI and Stripe credentials; those credentials must never be committed to the repository.
