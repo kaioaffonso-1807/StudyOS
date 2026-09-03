@@ -2,7 +2,25 @@
   "name": "studyos-english-api",
   "version": "0.1.0",
   "private": true,
-  "scripts": {"dev": "tsx src/index.ts", "start": "node dist/index.js"},
-  "dependencies": {"express": "latest", "openai": "latest", "multer": "latest", "pg": "latest", "@supabase/supabase-js": "latest", "stripe": "latest"},
-  "devDependencies": {"tsx": "latest", "typescript": "latest", "@types/express": "latest", "@types/node": "latest", "@types/multer": "latest", "@types/pg": "latest"}
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "express": "latest",
+    "openai": "latest",
+    "multer": "latest",
+    "pg": "latest",
+    "@supabase/supabase-js": "latest",
+    "stripe": "latest"
+  },
+  "devDependencies": {
+    "tsx": "latest",
+    "typescript": "latest",
+    "@types/express": "latest",
+    "@types/node": "latest",
+    "@types/multer": "latest",
+    "@types/pg": "latest"
+  }
 }
