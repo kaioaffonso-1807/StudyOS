@@ -3,7 +3,12 @@ import type { SkillScores } from "./progress-engine.js";
 import type { LearnerMemory } from "./memory.js";
 import type { Mistake } from "./store.js";
 const { Pool } = pg;
-const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false } }) : null;
+const ssl = process.env.DATABASE_SSL === "false"
+  ? false
+  : process.env.DATABASE_SSL_CA
+    ? { ca: process.env.DATABASE_SSL_CA, rejectUnauthorized: true }
+    : { rejectUnauthorized: true };
+const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, ssl }) : null;
 export type StoredProfile = { level: string; scores: SkillScores };
 export function databaseEnabled() { return Boolean(pool); }
 async function ensureUser(externalUserId: string) { if (!pool) return null; const r = await pool.query(`INSERT INTO users (external_id,email) VALUES ($1,$2) ON CONFLICT (external_id) DO UPDATE SET updated_at=now() RETURNING id`, [externalUserId,`${externalUserId}@studyos.local`]); return r.rows[0].id as string; }
