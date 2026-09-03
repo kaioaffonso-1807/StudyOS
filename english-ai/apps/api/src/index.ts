@@ -9,6 +9,9 @@ import { synthesizeSpeech, transcribeAudio } from "./speech.js";
 import { updateSkillScores, progressSnapshot, type SkillScores } from "./progress-engine.js";
 import { databaseEnabled, loadProfile, saveProfile as persistProfile, createConversation, getActiveConversation, saveConversationMessage, recordLearningEvent } from "./database.js";
 import { requireAuth, requestUserId, type AuthenticatedRequest } from "./auth.js";
+import { validateEnvironment } from "./env.js";
+
+validateEnvironment();
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
