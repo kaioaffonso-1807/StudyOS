@@ -37,3 +37,13 @@ export function requestUserId(req: AuthenticatedRequest, candidate?: string) {
   if (req.authUser?.id) return req.authUser.id;
   return candidate?.trim() || "demo-user";
 }
+
+export function assertUserAccess(req: AuthenticatedRequest, candidate?: string) {
+  const requested = candidate?.trim();
+  if (req.authUser?.id && requested && requested !== req.authUser.id) {
+    const error = new Error("Forbidden user access");
+    (error as Error & { status?: number }).status = 403;
+    throw error;
+  }
+  return req.authUser?.id ?? requested ?? "demo-user";
+}
