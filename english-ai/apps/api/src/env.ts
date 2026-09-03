@@ -12,4 +12,8 @@ export function validateEnvironment() {
   if (process.env.AUTH_REQUIRED !== "true") {
     throw new Error("AUTH_REQUIRED must be true in production");
   }
+
+  if (process.env.TRUST_PROXY === "true" && process.env.TRUST_PROXY_HOPS !== "1") {
+    throw new Error("Set TRUST_PROXY_HOPS=1 when TRUST_PROXY=true");
+  }
 }
