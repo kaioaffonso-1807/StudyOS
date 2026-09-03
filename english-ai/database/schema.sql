@@ -46,3 +46,19 @@ CREATE INDEX idx_attempts_user ON attempts(user_id, created_at DESC);
 CREATE INDEX idx_mistakes_user ON mistakes(user_id, resolved, last_seen_at DESC);
 CREATE INDEX idx_messages_conversation ON conversation_messages(conversation_id, created_at);
 CREATE INDEX idx_learning_events_user ON learning_events(user_id, created_at DESC);
+
+-- Defense in depth for any future Supabase Data API exposure.
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.learning_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.learner_memory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.mistakes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversation_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.learning_events ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.users, public.learning_profiles, public.learner_memory, public.attempts, public.mistakes, public.conversations, public.conversation_messages, public.learning_events FROM anon, authenticated;
+
+-- The current API uses a trusted direct Postgres connection, so client roles receive no direct table access.
+-- If a table is later exposed through Supabase Data API, add explicit authenticated policies and grants
+-- in the same migration rather than opening the table broadly.
