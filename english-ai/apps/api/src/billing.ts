@@ -132,6 +132,24 @@ export async function getEntitlement(userId: string) {
   };
 }
 
+export async function getUsageSnapshot(userId: string) {
+  const entitlement = await getEntitlement(userId);
+  const plan: Plan = entitlement.active && entitlement.plan === "pro" ? "pro" : "free";
+  const limits = usageLimits(plan);
+  const actions: UsageAction[] = ["ai_turn", "voice_turn", "realtime_call"];
+  if (!pool) return { plan, date: new Date().toISOString().slice(0,10), actions: Object.fromEntries(actions.map(action => [action,{used:0,limit:limits[action],remaining:limits[action]}])) };
+  const result = await pool.query(`SELECT action,count FROM usage_counters WHERE user_id=$1 AND usage_date=CURRENT_DATE`, [userId]);
+  const used = new Map<string, number>(result.rows.map(row => [String(row.action), Number(row.count)]));
+  return {
+    plan,
+    date: new Date().toISOString().slice(0,10),
+    actions: Object.fromEntries(actions.map(action => {
+      const count = used.get(action) ?? 0;
+      return [action, { used: count, limit: limits[action], remaining: Math.max(0, limits[action] - count) }];
+    })),
+  };
+}
+
 export async function consumeUsage(userId: string, action: UsageAction): Promise<UsageResult> {
   const entitlement = await getEntitlement(userId);
   const plan: Plan = entitlement.active && entitlement.plan === "pro" ? "pro" : "free";
