@@ -144,11 +144,12 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string) {
     if (userId) {
       const itemPrice = subscription.items.data[0]?.price?.id ?? null;
       const plan = subscription.metadata?.plan ?? "pro";
+      const periodEnd = subscription.items.data[0]?.current_period_end ?? null;
       await pool.query(
         `INSERT INTO billing_subscriptions(user_id,provider,provider_subscription_id,provider_customer_id,price_id,plan,status,current_period_end,cancel_at_period_end,updated_at)
          VALUES($1,'stripe',$2,$3,$4,$5,$6,to_timestamp($7),$8,now())
          ON CONFLICT(provider_subscription_id) DO UPDATE SET price_id=EXCLUDED.price_id,plan=EXCLUDED.plan,status=EXCLUDED.status,current_period_end=EXCLUDED.current_period_end,cancel_at_period_end=EXCLUDED.cancel_at_period_end,updated_at=now()`,
-        [userId, subscription.id, customerId, itemPrice, plan, subscription.status, subscription.current_period_end, subscription.cancel_at_period_end],
+        [userId, subscription.id, customerId, itemPrice, plan, subscription.status, periodEnd, subscription.cancel_at_period_end],
       );
     }
   }
