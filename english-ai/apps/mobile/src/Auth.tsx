@@ -5,12 +5,14 @@ import { supabase } from './supabase';
 type AuthProps = { onRecoveryStart?: () => void; onRecoveryComplete?: () => void };
 
 function parseAuthCallback(url: string) {
-  const hash = url.split('#')[1] ?? '';
-  const params = new URLSearchParams(hash);
+  const [base, hash = ''] = url.split('#', 2);
+  const query = base.includes('?') ? base.split('?')[1] : '';
+  const params = new URLSearchParams(`${query}&${hash}`);
   return {
     accessToken: params.get('access_token'),
     refreshToken: params.get('refresh_token'),
     type: params.get('type'),
+    error: params.get('error_description') ?? params.get('error_code'),
   };
 }
 
@@ -26,7 +28,11 @@ export default function Auth({ onRecoveryStart, onRecoveryComplete }: AuthProps)
     if (!supabase) return;
     const handleUrl = async (url: string) => {
       const callback = parseAuthCallback(url);
-      if (callback.accessToken && callback.refreshToken) {
+      if (callback.error) {
+        Alert.alert('Recovery error', callback.error);
+        return;
+      }
+      if (callback.accessToken && callback.refreshToken && callback.type === 'recovery') {
         onRecoveryStart?.();
         const { error } = await supabase.auth.setSession({
           access_token: callback.accessToken,
