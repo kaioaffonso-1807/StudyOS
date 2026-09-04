@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { SafeAreaView, View, Text, Pressable, TextInput, StyleSheet, ScrollView } from 'react-native';
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import Auth from './src/Auth';
+import Billing from './src/Billing';
 import { supabase } from './src/supabase';
 
-type Screen = 'home' | 'placement' | 'speak' | 'progress';
+type Screen = 'home' | 'placement' | 'speak' | 'progress' | 'account';
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:4000';
 type ChatMessage = { role: 'ai' | 'user'; text: string };
 type DailyLesson = { title: string; level: string; minutes: number; primarySkill: string; focus: string; reason: string; activities: Array<{ id: string; type: string; title: string; skill: string; minutes: number; instruction: string }> };
@@ -139,7 +140,7 @@ export default function App() {
   return <SafeAreaView style={styles.safe}>
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.header}><Text style={styles.logo}>StudyOS · English AI</Text><View style={styles.headerRight}><Text style={styles.pill}>{level}</Text><Pressable onPress={() => supabase?.auth.signOut()}><Text style={styles.signOut}>Sign out</Text></Pressable></View></View>
-      <View style={styles.nav}>{(['home','placement','speak','progress'] as Screen[]).map((s) => <Pressable key={s} style={styles.navButton} onPress={() => setScreen(s)}><Text>{s[0].toUpperCase()+s.slice(1)}</Text></Pressable>)}</View>
+      <View style={styles.nav}>{(['home','placement','speak','progress','account'] as Screen[]).map((s) => <Pressable key={s} style={styles.navButton} onPress={() => setScreen(s)}><Text>{s[0].toUpperCase()+s.slice(1)}</Text></Pressable>)}</View>
       {screen === 'home' && <>
         <View style={styles.hero}><Text style={styles.title}>Your English, every day.</Text><Text style={styles.muted}>You don't study English. You use it.</Text><Pressable style={styles.primary} onPress={() => setScreen('speak')}><Text style={styles.primaryText}>🎙 Start speaking</Text></Pressable></View>
         {lesson ? <View style={styles.card}><Text style={styles.small}>YOUR LESSON TODAY</Text><Text style={styles.section}>{lesson.title}</Text><Text style={styles.big}>{lesson.minutes} min</Text><Text style={styles.muted}>Focus: {lesson.primarySkill} · {lesson.focus}</Text><Text style={styles.reason}>{lesson.reason}</Text>{lesson.activities.map((activity) => <View key={activity.id} style={styles.activity}><Text style={styles.bold}>{activity.title} · {activity.minutes} min</Text><Text style={styles.muted}>{activity.instruction}</Text></View>)}<Pressable style={styles.primary} onPress={() => setScreen('speak')}><Text style={styles.primaryText}>Start personalized lesson</Text></Pressable></View> : <View style={styles.card}><Text style={styles.muted}>{lessonError || 'Building your lesson…'}</Text></View>}
@@ -147,6 +148,7 @@ export default function App() {
       {screen === 'placement' && <View style={styles.card}><Text style={styles.section}>Quick placement</Text><Text style={styles.muted}>Choose your starter level based on how comfortable you feel.</Text>{['A1','A2','B1','B2','C1'].map(l => <Pressable key={l} style={[styles.option, level===l && styles.selected]} onPress={() => setLevel(l)}><Text style={styles.optionText}>{l}</Text></Pressable>)}<Pressable style={styles.primary} onPress={savePlacement}><Text style={styles.primaryText}>Save profile</Text></Pressable></View>}
       {screen === 'speak' && <View style={styles.card}><Text style={styles.section}>AI Speaking Lab</Text><Text style={styles.muted}>Practice the focus from today's lesson. Type or speak; the AI corrects and responds.</Text><View style={styles.chat}>{messages.map((m,i)=><Text key={i} style={m.role==='ai'?styles.ai:styles.me}>{m.text}</Text>)}</View><TextInput value={reply} onChangeText={setReply} onSubmitEditing={send} placeholder="Type your answer in English..." style={styles.input}/><View style={styles.actions}><Pressable style={[styles.primary, styles.action]} onPress={send}><Text style={styles.primaryText}>{loading ? 'Thinking…' : 'Send'}</Text></Pressable><Pressable style={[styles.mic, recorderState.isRecording && styles.recording]} onPress={recorderState.isRecording ? stopRecording : startRecording}><Text style={styles.micText}>{recorderState.isRecording ? '⏹ Stop & analyze' : '🎙 Speak'}</Text></Pressable></View>{recordingError ? <Text style={styles.error}>{recordingError}</Text> : null}{mistake && <Text style={styles.mistake}>❌ A correction was detected and added to your review.</Text>}</View>}
       {screen === 'progress' && <View style={styles.card}><Text style={styles.section}>Learning profile</Text><Text style={styles.big}>{progress?.cefrLevel ?? level}</Text><Text style={styles.muted}>Current CEFR level · Overall {progress?.overall ?? 0}%</Text>{[['Speaking','speaking'],['Listening','listening'],['Grammar','grammar'],['Vocabulary','vocabulary'],['Pronunciation','pronunciation']].map(([label,key])=><View key={key} style={styles.metric}><Text>{label}</Text><Text style={styles.bold}>{Math.round(progress?.scores?.[key] ?? 0)}%</Text></View>)}<Text style={styles.mistake}>{progress?.nextLevel ? `Next target: ${progress.nextLevel}.` : 'You reached the current top target.'}</Text></View>}
+      {screen === 'account' && <Billing apiFetch={apiFetch} onDeleted={async () => { await supabase?.auth.signOut(); setScreen('home'); }} />}
     </ScrollView>
   </SafeAreaView>;
 }
