@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { supabase } from './supabase';
 
+type AuthProps = { onRecoveryStart?: () => void; onRecoveryComplete?: () => void };
+
 function parseAuthCallback(url: string) {
   const hash = url.split('#')[1] ?? '';
   const params = new URLSearchParams(hash);
@@ -12,7 +14,7 @@ function parseAuthCallback(url: string) {
   };
 }
 
-export default function Auth() {
+export default function Auth({ onRecoveryStart, onRecoveryComplete }: AuthProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -25,6 +27,7 @@ export default function Auth() {
     const handleUrl = async (url: string) => {
       const callback = parseAuthCallback(url);
       if (callback.accessToken && callback.refreshToken) {
+        onRecoveryStart?.();
         const { error } = await supabase.auth.setSession({
           access_token: callback.accessToken,
           refresh_token: callback.refreshToken,
@@ -36,7 +39,7 @@ export default function Auth() {
     Linking.getInitialURL().then((url) => { if (url) void handleUrl(url); });
     const subscription = Linking.addEventListener('url', ({ url }) => { void handleUrl(url); });
     return () => subscription.remove();
-  }, []);
+  }, [onRecoveryStart]);
 
   const submit = async () => {
     if (!supabase) {
@@ -93,6 +96,7 @@ export default function Auth() {
       Alert.alert('Password updated', 'Your password has been changed.');
       setRecovery(false);
       setPassword('');
+      onRecoveryComplete?.();
     } catch (error: any) {
       Alert.alert('Update error', error?.message ?? 'Unable to update your password.');
     } finally {
