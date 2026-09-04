@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "scheme": "studyos",
+    "runtimeVersion": { "policy": "appVersion" },
     "platforms": ["ios", "android", "web"],
     "ios": {
       "bundleIdentifier": "com.studyos.englishai"
@@ -20,7 +21,8 @@
           "microphonePermission": "Allow StudyOS English AI to use your microphone for speaking practice."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-updates"
     ]
   }
 }
