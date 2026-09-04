@@ -24,6 +24,30 @@ const successUrl = process.env.BILLING_SUCCESS_URL;
 const cancelUrl = process.env.BILLING_CANCEL_URL;
 const portalReturnUrl = process.env.BILLING_PORTAL_RETURN_URL;
 
+export type UsageAction = "ai_turn" | "voice_turn" | "realtime_call";
+export type Plan = "free" | "pro";
+export type UsageResult = { allowed: boolean; plan: Plan; action: UsageAction; used: number; limit: number };
+
+function positiveInt(name: string, fallback: number) {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+export function usageLimits(plan: Plan) {
+  if (plan === "pro") {
+    return {
+      ai_turn: positiveInt("USAGE_PRO_AI_TURNS_DAILY", 100),
+      voice_turn: positiveInt("USAGE_PRO_VOICE_TURNS_DAILY", 30),
+      realtime_call: positiveInt("USAGE_PRO_REALTIME_CALLS_DAILY", 30),
+    } satisfies Record<UsageAction, number>;
+  }
+  return {
+    ai_turn: positiveInt("USAGE_FREE_AI_TURNS_DAILY", 10),
+    voice_turn: positiveInt("USAGE_FREE_VOICE_TURNS_DAILY", 3),
+    realtime_call: positiveInt("USAGE_FREE_REALTIME_CALLS_DAILY", 5),
+  } satisfies Record<UsageAction, number>;
+}
+
 export function billingEnabled() {
   return Boolean(pool && stripe && prices.monthly && prices.yearly && successUrl && cancelUrl && portalReturnUrl);
 }
@@ -105,6 +129,31 @@ export async function getEntitlement(userId: string) {
     currentPeriodEnd: row.current_period_end ? new Date(row.current_period_end).toISOString() : null,
     cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
   };
+}
+
+export async function consumeUsage(userId: string, action: UsageAction): Promise<UsageResult> {
+  const entitlement = await getEntitlement(userId);
+  const plan: Plan = entitlement.active && entitlement.plan === "pro" ? "pro" : "free";
+  const limit = usageLimits(plan)[action];
+  if (!pool) return { allowed: true, plan, action, used: 0, limit };
+
+  const result = await pool.query(
+    `INSERT INTO usage_counters(user_id,usage_date,action,count)
+     VALUES($1,CURRENT_DATE,$2,1)
+     ON CONFLICT(user_id,usage_date,action) DO UPDATE
+       SET count=usage_counters.count+1,updated_at=now()
+       WHERE usage_counters.count < $3
+     RETURNING count`,
+    [userId, action, limit],
+  );
+  if (result.rowCount) {
+    return { allowed: true, plan, action, used: Number(result.rows[0].count), limit };
+  }
+  const current = await pool.query(
+    `SELECT count FROM usage_counters WHERE user_id=$1 AND usage_date=CURRENT_DATE AND action=$2`,
+    [userId, action],
+  );
+  return { allowed: false, plan, action, used: Number(current.rows[0]?.count ?? limit), limit };
 }
 
 async function userIdByCustomer(customerId: string) {
