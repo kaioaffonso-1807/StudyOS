@@ -25,7 +25,8 @@ export default function Auth({ onRecoveryStart, onRecoveryComplete }: AuthProps)
   const [recovery, setRecovery] = useState(false);
 
   useEffect(() => {
-    if (!supabase) return;
+    const client = supabase;
+    if (!client) return;
     const handleUrl = async (url: string) => {
       const callback = parseAuthCallback(url);
       if (callback.error) {
@@ -34,7 +35,7 @@ export default function Auth({ onRecoveryStart, onRecoveryComplete }: AuthProps)
       }
       if (callback.accessToken && callback.refreshToken && callback.type === 'recovery') {
         onRecoveryStart?.();
-        const { error } = await supabase.auth.setSession({
+        const { error } = await client.auth.setSession({
           access_token: callback.accessToken,
           refresh_token: callback.refreshToken,
         });
