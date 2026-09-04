@@ -28,7 +28,7 @@ export function createRateLimit(maxRequests: number, windowMs = 60_000) {
 }
 
 function usageProtected(action: UsageAction, limiter: ReturnType<typeof createRateLimit>) {
-  return async (req: Request, res: Response, next: NextFunction) => {
+  return (req: Request, res: Response, next: NextFunction) => limiter(req, res, async () => {
     const authUserId = (req as AuthenticatedRequestLike).authUser?.id ?? "demo-user";
     try {
       const usage = await consumeUsage(authUserId, action);
@@ -42,12 +42,12 @@ function usageProtected(action: UsageAction, limiter: ReturnType<typeof createRa
           limit: usage.limit,
         });
       }
-      return limiter(req, res, next);
+      return next();
     } catch (error) {
       console.error("Usage protection unavailable", error instanceof Error ? error.message : "unknown error");
       return res.status(503).json({ error: "Usage protection is temporarily unavailable" });
     }
-  };
+  });
 }
 
 export const rateLimit = createRateLimit(120);
