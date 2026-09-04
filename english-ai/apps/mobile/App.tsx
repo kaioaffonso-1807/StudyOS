@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { SafeAreaView, View, Text, Pressable, TextInput, StyleSheet, ScrollView } from 'react-native';
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import Auth from './src/Auth';
@@ -14,6 +14,7 @@ type Progress = { scores: Record<string, number>; overall: number; cefrLevel: st
 export default function App() {
   const [session, setSession] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [screen, setScreen] = useState<Screen>('home');
   const [level, setLevel] = useState('A1');
   const [reply, setReply] = useState('');
@@ -34,15 +35,15 @@ export default function App() {
     return () => data.subscription.unsubscribe();
   }, []);
 
-  const apiFetch = async (path: string, init: RequestInit = {}) => {
+  const apiFetch = useCallback(async (path: string, init: RequestInit = {}) => {
     const token = session?.access_token;
     const headers = new Headers(init.headers);
     if (token) headers.set('Authorization', `Bearer ${token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json');
     return fetch(`${API_URL}${path}`, { ...init, headers });
-  };
+  }, [session?.access_token]);
 
-  const loadProgress = async () => {
+  const loadProgress = useCallback(async () => {
     if (!session?.user?.id) return;
     try {
       const response = await apiFetch(`/api/v1/users/${session.user.id}/progress`);
@@ -51,9 +52,9 @@ export default function App() {
       setProgress(data.progress);
       if (data.progress?.cefrLevel) setLevel(data.progress.cefrLevel);
     } catch { /* Keep the current UI state if the API is unavailable. */ }
-  };
+  }, [apiFetch, session?.user?.id]);
 
-  const loadLesson = async () => {
+  const loadLesson = useCallback(async () => {
     if (!session?.user?.id) return;
     setLessonError('');
     try {
@@ -63,16 +64,16 @@ export default function App() {
       setLesson(data.lesson);
       if (data.progress) setProgress(data.progress);
     } catch { setLessonError('Could not load your personalized lesson.'); }
-  };
+  }, [apiFetch, session?.user?.id]);
 
   useEffect(() => {
     if (!session) return;
     AudioModule.requestRecordingPermissionsAsync().then(async (permission) => {
       if (permission.granted) await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
     }).catch(() => undefined);
-    loadProgress();
-    loadLesson();
-  }, [session?.user?.id]);
+    void loadProgress();
+    void loadLesson();
+  }, [session?.user?.id, loadProgress, loadLesson]);
 
   const send = async () => {
     const value = reply.trim();
@@ -84,7 +85,7 @@ export default function App() {
       const data = await response.json();
       setMessages((m) => [...m, { role: 'ai', text: data.reply }]); setMistake(Boolean(data.correction));
       if (data.progress) setProgress(data.progress);
-      loadLesson();
+      void loadLesson();
     } catch { setMessages((m) => [...m, { role: 'ai', text: 'I could not reach the learning server. Check your API connection and try again.' }]); }
     finally { setLoading(false); }
   };
@@ -129,13 +130,13 @@ export default function App() {
       if (data.reply) setMessages((m) => [...m, { role: 'ai', text: data.reply }]);
       setMistake(Boolean(data.correction));
       if (data.progress) setProgress(data.progress);
-      loadLesson();
+      void loadLesson();
     } catch { setRecordingError('Voice processing failed. Check the API connection and try again.'); }
     finally { setLoading(false); }
   };
 
   if (authLoading) return <SafeAreaView style={styles.safe}><View style={styles.authLoading}><Text style={styles.logo}>StudyOS · English AI</Text><Text style={styles.muted}>Loading your learning space…</Text></View></SafeAreaView>;
-  if (!session) return <SafeAreaView style={styles.safe}><Auth /></SafeAreaView>;
+  if (!session || recoveryMode) return <SafeAreaView style={styles.safe}><Auth onRecoveryStart={() => setRecoveryMode(true)} onRecoveryComplete={() => setRecoveryMode(false)} /></SafeAreaView>;
 
   return <SafeAreaView style={styles.safe}>
     <ScrollView contentContainerStyle={styles.container}>
