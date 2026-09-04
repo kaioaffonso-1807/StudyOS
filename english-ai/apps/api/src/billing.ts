@@ -14,6 +14,7 @@ const pool = process.env.DATABASE_URL
 
 const stripeSecret = process.env.STRIPE_SECRET_KEY;
 const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
+const featureEnabled = process.env.BILLING_ENABLED === "true";
 
 const prices: Record<string, string | undefined> = {
   monthly: process.env.STRIPE_PRICE_PRO_MONTHLY,
@@ -49,7 +50,7 @@ export function usageLimits(plan: Plan) {
 }
 
 export function billingEnabled() {
-  return Boolean(pool && stripe && prices.monthly && prices.yearly && successUrl && cancelUrl && portalReturnUrl);
+  return featureEnabled && Boolean(pool && stripe && prices.monthly && prices.yearly && successUrl && cancelUrl && portalReturnUrl);
 }
 
 export function stripeConfigured() {
