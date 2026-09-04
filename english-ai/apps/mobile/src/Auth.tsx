@@ -1,12 +1,42 @@
-import React, { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Alert, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { supabase } from './supabase';
+
+function parseAuthCallback(url: string) {
+  const hash = url.split('#')[1] ?? '';
+  const params = new URLSearchParams(hash);
+  return {
+    accessToken: params.get('access_token'),
+    refreshToken: params.get('refresh_token'),
+    type: params.get('type'),
+  };
+}
 
 export default function Auth() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [signUp, setSignUp] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [recovery, setRecovery] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const handleUrl = async (url: string) => {
+      const callback = parseAuthCallback(url);
+      if (callback.accessToken && callback.refreshToken) {
+        const { error } = await supabase.auth.setSession({
+          access_token: callback.accessToken,
+          refresh_token: callback.refreshToken,
+        });
+        if (error) Alert.alert('Recovery error', error.message);
+        else setRecovery(true);
+      }
+    };
+    Linking.getInitialURL().then((url) => { if (url) void handleUrl(url); });
+    const subscription = Linking.addEventListener('url', ({ url }) => { void handleUrl(url); });
+    return () => subscription.remove();
+  }, []);
 
   const submit = async () => {
     if (!supabase) {
@@ -31,6 +61,66 @@ export default function Auth() {
     }
   };
 
+  const sendReset = async () => {
+    if (!supabase || !email.trim()) {
+      Alert.alert('Email required', 'Enter your account email first.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: 'studyos://auth/reset',
+      });
+      if (error) throw error;
+      Alert.alert('Check your email', 'We sent a password recovery link to your email.');
+      setResetting(false);
+    } catch (error: any) {
+      Alert.alert('Recovery error', error?.message ?? 'Unable to send the recovery email.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updatePassword = async () => {
+    if (!supabase || password.length < 6) {
+      Alert.alert('Invalid password', 'Use at least 6 characters.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+      Alert.alert('Password updated', 'Your password has been changed.');
+      setRecovery(false);
+      setPassword('');
+    } catch (error: any) {
+      Alert.alert('Update error', error?.message ?? 'Unable to update your password.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (recovery) return (
+    <View style={styles.container}>
+      <Text style={styles.logo}>StudyOS · English AI</Text>
+      <Text style={styles.title}>Choose a new password</Text>
+      <Text style={styles.muted}>Your recovery link is active. Set a new password to continue.</Text>
+      <TextInput value={password} onChangeText={setPassword} placeholder="New password" secureTextEntry style={styles.input} />
+      <Pressable style={styles.primary} onPress={updatePassword} disabled={loading}><Text style={styles.primaryText}>{loading ? 'Please wait…' : 'Update password'}</Text></Pressable>
+    </View>
+  );
+
+  if (resetting) return (
+    <View style={styles.container}>
+      <Text style={styles.logo}>StudyOS · English AI</Text>
+      <Text style={styles.title}>Reset your password</Text>
+      <Text style={styles.muted}>Enter your account email and we will send you a secure recovery link.</Text>
+      <TextInput value={email} onChangeText={setEmail} placeholder="Email" autoCapitalize="none" keyboardType="email-address" style={styles.input} />
+      <Pressable style={styles.primary} onPress={sendReset} disabled={loading}><Text style={styles.primaryText}>{loading ? 'Sending…' : 'Send recovery link'}</Text></Pressable>
+      <Pressable style={styles.link} onPress={() => setResetting(false)}><Text>Back to sign in</Text></Pressable>
+    </View>
+  );
+
   return (
     <View style={styles.container}>
       <Text style={styles.logo}>StudyOS · English AI</Text>
@@ -39,6 +129,7 @@ export default function Auth() {
       <TextInput value={email} onChangeText={setEmail} placeholder="Email" autoCapitalize="none" keyboardType="email-address" style={styles.input} />
       <TextInput value={password} onChangeText={setPassword} placeholder="Password" secureTextEntry style={styles.input} />
       <Pressable style={styles.primary} onPress={submit} disabled={loading}><Text style={styles.primaryText}>{loading ? 'Please wait…' : signUp ? 'Create account' : 'Sign in'}</Text></Pressable>
+      {!signUp && <Pressable style={styles.link} onPress={() => setResetting(true)}><Text>Forgot your password?</Text></Pressable>}
       <Pressable style={styles.link} onPress={() => setSignUp((value) => !value)}><Text>{signUp ? 'Already have an account? Sign in' : 'New here? Create an account'}</Text></Pressable>
     </View>
   );
