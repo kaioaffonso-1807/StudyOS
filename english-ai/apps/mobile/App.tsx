@@ -75,6 +75,9 @@ export default function App() {
     void loadLesson();
   }, [session?.user?.id, loadProgress, loadLesson]);
 
+  const handleRecoveryStart = useCallback(() => setRecoveryMode(true), []);
+  const handleRecoveryComplete = useCallback(() => setRecoveryMode(false), []);
+
   const send = async () => {
     const value = reply.trim();
     if (!value || loading || !session) return;
@@ -136,7 +139,7 @@ export default function App() {
   };
 
   if (authLoading) return <SafeAreaView style={styles.safe}><View style={styles.authLoading}><Text style={styles.logo}>StudyOS · English AI</Text><Text style={styles.muted}>Loading your learning space…</Text></View></SafeAreaView>;
-  if (!session || recoveryMode) return <SafeAreaView style={styles.safe}><Auth onRecoveryStart={() => setRecoveryMode(true)} onRecoveryComplete={() => setRecoveryMode(false)} /></SafeAreaView>;
+  if (!session || recoveryMode) return <SafeAreaView style={styles.safe}><Auth onRecoveryStart={handleRecoveryStart} onRecoveryComplete={handleRecoveryComplete} /></SafeAreaView>;
 
   return <SafeAreaView style={styles.safe}>
     <ScrollView contentContainerStyle={styles.container}>
