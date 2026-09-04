@@ -1,10 +1,11 @@
 # StudyOS Billing setup
 
-StudyOS uses Stripe Billing for the Pro subscription. Checkout and the Customer Portal are created server-side; the mobile/web client never receives `STRIPE_SECRET_KEY` or `STRIPE_WEBHOOK_SECRET`.
+StudyOS uses Stripe Billing for the Pro subscription. Checkout and the Customer Portal are created server-side; the client never receives `STRIPE_SECRET_KEY` or `STRIPE_WEBHOOK_SECRET`.
 
 ## Required production variables
 
 ```text
+BILLING_ENABLED=true
 STRIPE_SECRET_KEY=sk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 STRIPE_PRICE_PRO_MONTHLY=price_...
@@ -14,7 +15,7 @@ BILLING_CANCEL_URL=https://YOUR_APP_DOMAIN/billing/cancel
 BILLING_PORTAL_RETURN_URL=https://YOUR_APP_DOMAIN/settings/billing
 ```
 
-`STRIPE_PRICE_PRO_YEARLY` is optional until an annual plan is created. The backend never accepts a client-supplied Stripe price ID; it maps `monthly`/`yearly` to these server-side environment variables.
+Both monthly and yearly prices are required when billing is enabled. The backend never accepts a client-supplied Stripe price ID; it maps `monthly`/`yearly` to these server-side environment variables.
 
 ## Stripe Dashboard
 
@@ -34,4 +35,4 @@ The database stores a local projection of Stripe subscription state. Product acc
 
 ## Important production rule
 
-The migration in `database/migrations/002_billing.sql` must be applied to the production PostgreSQL database before enabling Checkout. Keep Stripe secrets only in the deployment provider's secret manager/environment configuration, never in Git or the mobile app.
+The migrations in `database/migrations/002_billing.sql` and `database/migrations/002_usage_counters.sql` must be applied to the production PostgreSQL database before enabling paid usage. Keep Stripe secrets only in the deployment provider's secret manager/environment configuration, never in Git or the mobile app.
