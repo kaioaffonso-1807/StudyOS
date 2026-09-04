@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Platform, Pressable, Text, View, StyleSheet } from 'react-native';
+import { Alert, AppState, Platform, Pressable, Text, View, StyleSheet } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -21,7 +21,15 @@ export default function Billing({ apiFetch, onDeleted }: BillingProps) {
       if (usageResponse.ok) { const data = await usageResponse.json(); setUsage(data.actions ?? {}); }
     } catch { setMessage('Billing information is temporarily unavailable.'); }
   };
-  useEffect(() => { load(); }, []);
+
+  useEffect(() => { void load(); }, [apiFetch]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void load();
+    });
+    return () => subscription.remove();
+  }, [apiFetch]);
 
   const openCheckout = async (cycle: 'monthly' | 'yearly') => {
     setBusy(true); setMessage('');
