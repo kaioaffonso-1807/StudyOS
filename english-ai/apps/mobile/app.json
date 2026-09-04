@@ -1,1 +1,26 @@
-{"expo":{"name":"StudyOS English AI","slug":"studyos-english-ai","version":"0.1.0","orientation":"portrait","userInterfaceStyle":"automatic","platforms":["ios","android","web"]}}
+{
+  "expo": {
+    "name": "StudyOS English AI",
+    "slug": "studyos-english-ai",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "studyos",
+    "platforms": ["ios", "android", "web"],
+    "ios": {
+      "bundleIdentifier": "com.studyos.englishai"
+    },
+    "android": {
+      "package": "com.studyos.englishai"
+    },
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow StudyOS English AI to use your microphone for speaking practice."
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
