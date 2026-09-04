@@ -21,7 +21,7 @@
     "expo-auth-session": "~7.0.11",
     "expo-linking": "~8.0.12",
     "expo-application": "~7.0.8",
-    "expo-updates": "~29.0.20",
+    "expo-updates": "~57.0.21",
     "expo-file-system": "~19.0.24",
     "expo-sharing": "~14.0.8",
     "@supabase/supabase-js": "2.112.4",
