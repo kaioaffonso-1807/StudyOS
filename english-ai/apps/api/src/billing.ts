@@ -3,11 +3,13 @@ import type { User } from "@supabase/supabase-js";
 import pg from "pg";
 
 const { Pool } = pg;
+const ssl = process.env.DATABASE_SSL === "false"
+  ? false
+  : process.env.DATABASE_SSL_CA
+    ? { ca: process.env.DATABASE_SSL_CA, rejectUnauthorized: true }
+    : { rejectUnauthorized: true };
 const pool = process.env.DATABASE_URL
-  ? new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: true },
-    })
+  ? new Pool({ connectionString: process.env.DATABASE_URL, ssl })
   : null;
 
 const stripeSecret = process.env.STRIPE_SECRET_KEY;
@@ -18,8 +20,36 @@ const prices: Record<string, string | undefined> = {
   yearly: process.env.STRIPE_PRICE_PRO_YEARLY,
 };
 
+const successUrl = process.env.BILLING_SUCCESS_URL;
+const cancelUrl = process.env.BILLING_CANCEL_URL;
+const portalReturnUrl = process.env.BILLING_PORTAL_RETURN_URL;
+
+export type UsageAction = "ai_turn" | "voice_turn" | "realtime_call";
+export type Plan = "free" | "pro";
+export type UsageResult = { allowed: boolean; plan: Plan; action: UsageAction; used: number; limit: number };
+
+function positiveInt(name: string, fallback: number) {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+export function usageLimits(plan: Plan) {
+  if (plan === "pro") {
+    return {
+      ai_turn: positiveInt("USAGE_PRO_AI_TURNS_DAILY", 100),
+      voice_turn: positiveInt("USAGE_PRO_VOICE_TURNS_DAILY", 30),
+      realtime_call: positiveInt("USAGE_PRO_REALTIME_CALLS_DAILY", 30),
+    } satisfies Record<UsageAction, number>;
+  }
+  return {
+    ai_turn: positiveInt("USAGE_FREE_AI_TURNS_DAILY", 10),
+    voice_turn: positiveInt("USAGE_FREE_VOICE_TURNS_DAILY", 3),
+    realtime_call: positiveInt("USAGE_FREE_REALTIME_CALLS_DAILY", 5),
+  } satisfies Record<UsageAction, number>;
+}
+
 export function billingEnabled() {
-  return Boolean(pool && stripe && prices.monthly);
+  return Boolean(pool && stripe && prices.monthly && prices.yearly && successUrl && cancelUrl && portalReturnUrl);
 }
 
 export function stripeConfigured() {
@@ -50,16 +80,17 @@ async function customerForUser(user: User) {
     metadata: { studyos_user_id: user.id },
   });
   await pool.query(
-    `INSERT INTO billing_customers(user_id,provider,provider_customer_id) VALUES($1,'stripe',$2)`,
+    `INSERT INTO billing_customers(user_id,provider,provider_customer_id) VALUES($1,'stripe',$2)
+     ON CONFLICT(user_id) DO UPDATE SET provider_customer_id=EXCLUDED.provider_customer_id,updated_at=now()`,
     [userId, customer.id],
   );
   return customer.id;
 }
 
-export async function createCheckoutSession(user: User, cycle: "monthly" | "yearly", successUrl: string, cancelUrl: string) {
+export async function createCheckoutSession(user: User, cycle: "monthly" | "yearly", _clientSuccessUrl?: string, _clientCancelUrl?: string) {
   if (!stripe || !pool) throw new Error("billing is not configured");
   const price = prices[cycle];
-  if (!price) throw new Error(`Stripe price for ${cycle} is not configured`);
+  if (!price || !successUrl || !cancelUrl) throw new Error("Stripe billing URLs or price are not configured");
   const customer = await customerForUser(user);
   return stripe.checkout.sessions.create({
     mode: "subscription",
@@ -74,10 +105,10 @@ export async function createCheckoutSession(user: User, cycle: "monthly" | "year
   });
 }
 
-export async function createPortalSession(user: User, returnUrl: string) {
-  if (!stripe) throw new Error("billing is not configured");
+export async function createPortalSession(user: User, _clientReturnUrl?: string) {
+  if (!stripe || !portalReturnUrl) throw new Error("billing portal is not configured");
   const customer = await customerForUser(user);
-  return stripe.billingPortal.sessions.create({ customer, return_url: returnUrl });
+  return stripe.billingPortal.sessions.create({ customer, return_url: portalReturnUrl });
 }
 
 export async function getEntitlement(userId: string) {
@@ -98,6 +129,31 @@ export async function getEntitlement(userId: string) {
     currentPeriodEnd: row.current_period_end ? new Date(row.current_period_end).toISOString() : null,
     cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
   };
+}
+
+export async function consumeUsage(userId: string, action: UsageAction): Promise<UsageResult> {
+  const entitlement = await getEntitlement(userId);
+  const plan: Plan = entitlement.active && entitlement.plan === "pro" ? "pro" : "free";
+  const limit = usageLimits(plan)[action];
+  if (!pool) return { allowed: true, plan, action, used: 0, limit };
+
+  const result = await pool.query(
+    `INSERT INTO usage_counters(user_id,usage_date,action,count)
+     VALUES($1,CURRENT_DATE,$2,1)
+     ON CONFLICT(user_id,usage_date,action) DO UPDATE
+       SET count=usage_counters.count+1,updated_at=now()
+       WHERE usage_counters.count < $3
+     RETURNING count`,
+    [userId, action, limit],
+  );
+  if (result.rowCount) {
+    return { allowed: true, plan, action, used: Number(result.rows[0].count), limit };
+  }
+  const current = await pool.query(
+    `SELECT count FROM usage_counters WHERE user_id=$1 AND usage_date=CURRENT_DATE AND action=$2`,
+    [userId, action],
+  );
+  return { allowed: false, plan, action, used: Number(current.rows[0]?.count ?? limit), limit };
 }
 
 async function userIdByCustomer(customerId: string) {
@@ -137,11 +193,12 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string) {
     if (userId) {
       const itemPrice = subscription.items.data[0]?.price?.id ?? null;
       const plan = subscription.metadata?.plan ?? "pro";
+      const periodEnd = subscription.items.data[0]?.current_period_end ?? null;
       await pool.query(
         `INSERT INTO billing_subscriptions(user_id,provider,provider_subscription_id,provider_customer_id,price_id,plan,status,current_period_end,cancel_at_period_end,updated_at)
          VALUES($1,'stripe',$2,$3,$4,$5,$6,to_timestamp($7),$8,now())
          ON CONFLICT(provider_subscription_id) DO UPDATE SET price_id=EXCLUDED.price_id,plan=EXCLUDED.plan,status=EXCLUDED.status,current_period_end=EXCLUDED.current_period_end,cancel_at_period_end=EXCLUDED.cancel_at_period_end,updated_at=now()`,
-        [userId, subscription.id, customerId, itemPrice, plan, subscription.status, subscription.current_period_end, subscription.cancel_at_period_end],
+        [userId, subscription.id, customerId, itemPrice, plan, subscription.status, periodEnd, subscription.cancel_at_period_end],
       );
     }
   }

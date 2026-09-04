@@ -11,6 +11,7 @@ import { databaseEnabled, loadProfile, saveProfile as persistProfile, createConv
 import { requireAuth, requestUserId, type AuthenticatedRequest } from "./auth.js";
 import { validateEnvironment } from "./env.js";
 import { rateLimit, aiRateLimit, voiceRateLimit, realtimeRateLimit } from "./rate-limit.js";
+import { billingEnabled, createCheckoutSession, createPortalSession, getEntitlement, handleStripeWebhook, closeBilling } from "./billing.js";
 
 validateEnvironment();
 const app = express();
@@ -25,20 +26,28 @@ app.use((_req, res, next) => {
   res.setHeader("Permissions-Policy", "microphone=(), camera=(), geolocation=()");
   next();
 });
+// Stripe requires the exact raw request body for webhook signature verification.
+app.post("/api/v1/billing/webhook", express.raw({ type: "application/json", limit: "256kb" }), async (req, res) => {
+  const signature = req.header("stripe-signature");
+  if (!signature) return res.status(400).json({ error: "stripe-signature is required" });
+  try {
+    const result = await handleStripeWebhook(req.body as Buffer, signature);
+    return res.json({ received: true, ...result });
+  } catch (error) {
+    console.error("Stripe webhook rejected", error instanceof Error ? error.message : "unknown error");
+    return res.status(400).json({ error: "Invalid webhook" });
+  }
+});
 app.use(express.json({ limit: "2mb", strict: true }));
 app.use(rateLimit);
 app.use("/api/v1", requireAuth);
 const defaultScores: SkillScores = { speaking: 28, listening: 35, grammar: 36, vocabulary: 42, pronunciation: 30 };
 const profiles = new Map<string, { level: string; scores: SkillScores }>();
 const routeParam = (value: string | string[] | undefined): string => Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
-const boundedString = (value: unknown, max: number): string | undefined => {
-  if (value === undefined || value === null) return undefined;
-  const text = String(value).trim();
-  return text ? text.slice(0, max) : undefined;
-};
+const boundedString = (value: unknown, max: number): string | undefined => { if (value === undefined || value === null) return undefined; const text = String(value).trim(); return text ? text.slice(0, max) : undefined; };
 async function getProfile(userId: string) { const cached=profiles.get(userId); if(cached)return cached; const stored=await loadProfile(userId); const profile=stored??{level:"A1",scores:{...defaultScores}}; profiles.set(userId,profile); return profile; }
 async function saveProfile(userId:string,level:string,scores:SkillScores){const profile={level,scores};profiles.set(userId,profile);await persistProfile(userId,profile);return profile;}
-app.get("/health",(_req,res)=>res.json({ok:true,service:"studyos-english-api",aiEnabled:Boolean(process.env.OPENAI_API_KEY),voiceEnabled:Boolean(process.env.OPENAI_API_KEY),realtimeEnabled:Boolean(process.env.OPENAI_API_KEY),adaptiveEngine:true,progressEngine:true,database:databaseEnabled(),authRequired:process.env.AUTH_REQUIRED === "true"}));
+app.get("/health",(_req,res)=>res.json({ok:true,service:"studyos-english-api",aiEnabled:Boolean(process.env.OPENAI_API_KEY),voiceEnabled:Boolean(process.env.OPENAI_API_KEY),realtimeEnabled:Boolean(process.env.OPENAI_API_KEY),adaptiveEngine:true,progressEngine:true,database:databaseEnabled(),authRequired:process.env.AUTH_REQUIRED === "true",billing:billingEnabled()}));
 app.get("/api/v1/lessons/daily",(req,res)=>{const level=String(req.query.level??"A1").toUpperCase();const minutes=Math.max(5,Math.min(60,Number(req.query.minutes??10)));res.json({plan:buildDailyPlan({cefrLevel:level,...defaultScores},minutes)});});
 app.get("/api/v1/users/:userId/lesson/today",async(req:AuthenticatedRequest,res)=>{const userId=requestUserId(req,routeParam(req.params.userId));const profile=await getProfile(userId);const dailyMinutes=Math.max(5,Math.min(60,Number(req.query.minutes??10)));const memory=await getLearnerMemory(userId);const mistakes=await listOpenMistakes(userId);const input:AdaptiveInput={level:profile.level,goal:memory.goals.at(-1),dailyMinutes,scores:profile.scores,mistakes,interests:memory.interests};res.json({lesson:buildAdaptiveLesson(input),progress:progressSnapshot(profile.scores,profile.level),memory,mistakes});});
 app.get("/api/v1/users/:userId/progress",async(req:AuthenticatedRequest,res)=>{const profile=await getProfile(requestUserId(req,routeParam(req.params.userId)));res.json({progress:progressSnapshot(profile.scores,profile.level)});});
@@ -58,7 +67,10 @@ app.post("/api/v1/speech/transcribe",voiceRateLimit,upload.single("file"),async(
 app.post("/api/v1/speech/synthesize",voiceRateLimit,async(req,res)=>{const text=boundedString(req.body?.text,5000);if(!text)return res.status(400).json({error:"text is required"});if(!process.env.OPENAI_API_KEY)return res.status(503).json({error:"Voice AI is not configured. Set OPENAI_API_KEY."});try{return res.json({audioBase64:await synthesizeSpeech(text),mimeType:"audio/mpeg",provider:"openai"});}catch{return res.status(502).json({error:"Unable to synthesize speech"});}});
 app.post("/api/v1/voice/turn",voiceRateLimit,upload.single("file"),async(req:AuthenticatedRequest,res)=>{if(!req.file)return res.status(400).json({error:"file is required"});if(!process.env.OPENAI_API_KEY)return res.status(503).json({error:"Voice AI is not configured. Set OPENAI_API_KEY."});const userId=requestUserId(req,req.body?.userId);const profile=await getProfile(userId);const level=String(req.body?.level??profile.level).toUpperCase();const goal=boundedString(req.body?.goal,200);try{const transcript=await transcribeAudio(req.file,String(req.body?.language??"en").slice(0,10));const result=await handleTutorTurn(userId,transcript,level,goal);const saved=await processTutorResult(userId,result);if(databaseEnabled())await persistTutorConversation(userId,level,"voice conversation",transcript,result);else await recordConversation(userId);return res.json({transcript,...result,progress:progressSnapshot(saved.scores,saved.level),audioBase64:await synthesizeSpeech(result.reply),mimeType:"audio/mpeg"});}catch{return res.status(502).json({error:"Unable to process voice turn"});}});
 app.post("/api/v1/realtime/call",realtimeRateLimit,async(req:AuthenticatedRequest,res)=>{const sdp=boundedString(req.body?.sdp,500_000);const level=String(req.body?.level??"A1").toUpperCase();const goal=boundedString(req.body?.goal,200)??"general conversation";if(!sdp)return res.status(400).json({error:"sdp is required"});const apiKey=process.env.OPENAI_API_KEY;if(!apiKey)return res.status(503).json({error:"Realtime AI is not configured. Set OPENAI_API_KEY."});const instructions=["You are StudyOS English AI, a patient personal English tutor.",`Student CEFR level: ${level}.`,`Student goal: ${goal}.`,"Speak mostly in English. Adapt vocabulary and speed to the student's level.","Keep turns short and natural. Correct one important mistake after the student speaks, then continue the conversation.","Never shame the student. Encourage them to repeat corrected sentences when useful."].join(" ");try{const form=new FormData();form.append("sdp",new Blob([sdp],{type:"application/sdp"}),"offer.sdp");form.append("session",JSON.stringify({type:"realtime",model:process.env.OPENAI_REALTIME_MODEL??"gpt-realtime",audio:{input:{turn_detection:{type:"semantic_vad",eagerness:"medium"}},output:{voice:process.env.OPENAI_REALTIME_VOICE??"marin"}},instructions}));const response=await fetch("https://api.openai.com/v1/realtime/calls",{method:"POST",headers:{Authorization:`Bearer ${apiKey}`},body:form});const answer=await response.text();if(!response.ok)return res.status(response.status).type("application/sdp").send(answer);return res.status(201).type("application/sdp").send(answer);}catch{return res.status(502).json({error:"Unable to create realtime call"});}});
+app.get("/api/v1/billing/entitlement",async(req:AuthenticatedRequest,res)=>{if(!req.authUser)return res.status(401).json({error:"Authentication required"});try{return res.json(await getEntitlement(req.authUser.id));}catch{return res.status(503).json({error:"Billing is not configured"});}});
+app.post("/api/v1/billing/checkout",async(req:AuthenticatedRequest,res)=>{if(!req.authUser)return res.status(401).json({error:"Authentication required"});const cycle=req.body?.cycle==="yearly"?"yearly":"monthly";const successUrl=boundedString(req.body?.successUrl,2000)??process.env.BILLING_SUCCESS_URL;const cancelUrl=boundedString(req.body?.cancelUrl,2000)??process.env.BILLING_CANCEL_URL;if(!successUrl||!cancelUrl)return res.status(500).json({error:"Billing return URLs are not configured"});try{const session=await createCheckoutSession(req.authUser,cycle,successUrl,cancelUrl);return res.status(201).json({url:session.url,sessionId:session.id});}catch(error){console.error("Checkout creation failed",error instanceof Error?error.message:"unknown error");return res.status(503).json({error:"Unable to start checkout"});}});
+app.post("/api/v1/billing/portal",async(req:AuthenticatedRequest,res)=>{if(!req.authUser)return res.status(401).json({error:"Authentication required"});const returnUrl=boundedString(req.body?.returnUrl,2000)??process.env.BILLING_PORTAL_RETURN_URL;if(!returnUrl)return res.status(500).json({error:"Billing return URL is not configured"});try{const session=await createPortalSession(req.authUser,returnUrl);return res.status(201).json({url:session.url});}catch(error){console.error("Billing portal creation failed",error instanceof Error?error.message:"unknown error");return res.status(503).json({error:"Unable to open billing portal"});}});
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => { console.error("Unhandled API error", err); if (res.headersSent) return; return res.status(500).json({ error: "Internal server error" }); });
 const server = app.listen(port,()=>console.log(`StudyOS English API listening on port ${port}`));
-process.on("SIGTERM", async () => { server.close(); await closeDatabase(); process.exit(0); });
-process.on("SIGINT", async () => { server.close(); await closeDatabase(); process.exit(0); });
+process.on("SIGTERM", async () => { server.close(); await closeDatabase(); await closeBilling(); process.exit(0); });
+process.on("SIGINT", async () => { server.close(); await closeDatabase(); await closeBilling(); process.exit(0); });
