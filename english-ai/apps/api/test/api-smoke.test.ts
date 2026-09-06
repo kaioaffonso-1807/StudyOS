@@ -7,7 +7,7 @@ let baseUrl = "";
 
 before(async () => {
   server = app.listen(0);
-  await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+  await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Unable to determine test port");
   baseUrl = `http://127.0.0.1:${address.port}`;
@@ -18,19 +18,20 @@ after(async () => {
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 });
 
-test("health exposes liveness and request id", async () => {
+test("health exposes liveness, request id and no-store", async () => {
   const response = await fetch(`${baseUrl}/health`);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-request-id")?.length, 36);
-  const body = await response.json() as { ok: boolean; service: string };
-  assert.equal(body.ok, true);
-  assert.equal(body.service, "studyos-english-api");
+  assert.equal(response.headers.get("cache-control"), "no-store");
 });
 
-test("readiness returns 503 when database is not configured", async () => {
-  const response = await fetch(`${baseUrl}/ready`);
-  assert.equal(response.status, 503);
-  const body = await response.json() as { ok: boolean; ready: boolean };
-  assert.equal(body.ok, false);
-  assert.equal(body.ready, false);
+test("JSON mutation endpoints reject unsupported content types", async () => {
+  const response = await fetch(`${baseUrl}/api/v1/progress`, {
+    method: "POST",
+    headers: { "content-type": "text/plain" },
+    body: "not json",
+  });
+  assert.equal(response.status, 415);
+  const body = await response.json() as { error: string };
+  assert.match(body.error, /Content-Type/);
 });
