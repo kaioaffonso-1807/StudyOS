@@ -35,3 +35,14 @@ test("JSON mutation endpoints reject unsupported content types", async () => {
   const body = await response.json() as { error: string };
   assert.match(body.error, /Content-Type/);
 });
+
+test("PUT and PATCH mutations also reject unsupported content types", async () => {
+  for (const method of ["PUT", "PATCH"]) {
+    const response = await fetch(`${baseUrl}/api/v1/users/demo-user/memory`, {
+      method,
+      headers: { "content-type": "text/plain" },
+      body: "not json",
+    });
+    assert.equal(response.status, 415);
+  }
+});
