@@ -1,0 +1,20 @@
+name: StudyOS Dependency Review
+
+on:
+  pull_request:
+    paths:
+      - "english-ai/apps/api/package*.json"
+      - "english-ai/apps/mobile/package*.json"
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
