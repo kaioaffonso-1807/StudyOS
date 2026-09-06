@@ -13,6 +13,7 @@ import { requireAuth, requestUserId, type AuthenticatedRequest } from "./auth.js
 import { validateEnvironment } from "./env.js";
 import { rateLimit, aiRateLimit, voiceRateLimit, realtimeRateLimit } from "./rate-limit.js";
 import { billingEnabled, createCheckoutSession, createPortalSession, getEntitlement, getUsageSnapshot, handleStripeWebhook, closeBilling } from "./billing.js";
+import { requireJsonContent, securityHeaders } from "./http-security.js";
 
 validateEnvironment();
 export const app = express();
@@ -43,7 +44,9 @@ app.post("/api/v1/billing/webhook", express.raw({ type: "application/json", limi
   }
 });
 app.use(express.json({ limit: "2mb", strict: true }));
+app.use(securityHeaders);
 app.use(rateLimit);
+app.use(requireJsonContent);
 app.use("/api/v1", requireAuth);
 const defaultScores: SkillScores = { speaking: 28, listening: 35, grammar: 36, vocabulary: 42, pronunciation: 30 };
 const profiles = new Map<string, { level: string; scores: SkillScores }>();
